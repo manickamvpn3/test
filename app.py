@@ -2,7 +2,11 @@ import pandas as pd
 import plotly.express as px
 from dash import Dash, dcc, html, Input, Output
 
+# ------------------------------------------------------------
+# 1. LOAD + FILTER DATA
+# ------------------------------------------------------------
 df = pd.read_csv("country_inventory_global_co2e_100yr.csv")
+
 countries = [
     "AGO","ARG","AUS","AUT","AZE","BHR","BGD","BRB","BEL","BRA","CAN","CHL",
     "CHN","COL","CRI","CYP","CZE","DNK","DOM","EGY","EST","FIN","FRA","DEU",
@@ -14,7 +18,6 @@ countries = [
 ]
 
 df = df[df["iso3_country"].isin(countries)]
-
 latest_year = df["year"].max()
 
 # ------------------------------------------------------------
@@ -22,16 +25,13 @@ latest_year = df["year"].max()
 # ------------------------------------------------------------
 
 app = Dash(__name__)
-server = app.server
+serever = app.server
 app.layout = html.Div(
     style={"maxWidth": "1200px", "margin": "auto"},
     children=[
 
-        html.H2("Country Emissions Materiality Dashboard"),
+        html.H2("Country Emissions Dashboard"),
 
-        # ------------------------
-        # Country dropdown
-        # ------------------------
         dcc.Dropdown(
             id="country-dropdown",
             options=[
@@ -40,25 +40,35 @@ app.layout = html.Div(
             ],
             value="CHN",
             clearable=False,
-            style={"width": "300px"}
+            style={"width": "300px", "marginBottom": "20px"}
         ),
 
-        html.Br(),
+        # ----------------------------------------------------
+        # TOP ROW: TWO CHARTS SIDE BY SIDE
+        # ----------------------------------------------------
+        html.Div(
+            style={"display": "flex", "gap": "20px"},
+            children=[
 
-        # ------------------------
-        # Chart 1: Sector shares
-        # ------------------------
-        dcc.Graph(id="sector-share-bar"),
+                html.Div(
+                    style={"flex": "1"},
+                    children=[dcc.Graph(id="sector-share-bar")]
+                ),
 
-        # ------------------------
-        # Chart 2: Cumulative coverage
-        # ------------------------
-        dcc.Graph(id="cumulative-coverage"),
+                html.Div(
+                    style={"flex": "1"},
+                    children=[dcc.Graph(id="emissions-trends-absolute")]
+                ),
+            ]
+        ),
 
-        # ------------------------
-        # Chart 3: Emissions trends
-        # ------------------------
-        dcc.Graph(id="emissions-trends")
+        # ----------------------------------------------------
+        # BOTTOM ROW: FULL-WIDTH CHART
+        # ----------------------------------------------------
+        html.Div(
+            style={"marginTop": "20px"},
+            children=[dcc.Graph(id="emissions-structure-ordered")]
+        )
     ]
 )
 
@@ -68,94 +78,97 @@ app.layout = html.Div(
 
 @app.callback(
     Output("sector-share-bar", "figure"),
-    Output("cumulative-coverage", "figure"),
-    Output("emissions-trends", "figure"),
+    Output("emissions-trends-absolute", "figure"),
+    Output("emissions-structure-ordered", "figure"),
     Input("country-dropdown", "value")
 )
 def update_dashboard(country):
 
-    # ------------------------
-    # Filter data
-    # ------------------------
     df_country = df[df["iso3_country"] == country]
 
     # ------------------------
-    # Chart 1: Sector shares (latest year)
+    # Chart 1: Sector share bar
     # ------------------------
     df_latest = df_country[df_country["year"] == latest_year]
 
-    sector_totals = (
+    sector_latest = (
         df_latest.groupby("sector", as_index=False)
                  .agg(emissions=("emissions", "sum"))
     )
 
-    sector_totals["share"] = (
-        sector_totals["emissions"] / sector_totals["emissions"].sum()
+    sector_latest["share"] = (
+        sector_latest["emissions"] / sector_latest["emissions"].sum()
     )
 
+    sector_latest = sector_latest.sort_values("share")
+
     fig1 = px.bar(
-        sector_totals.sort_values("share"),
+        sector_latest,
         x="share",
         y="sector",
         orientation="h",
-        labels={
-            "share": "Share of national emissions",
-            "sector": "Sector"
-        },
-        title=f"{country}: Emissions by Sector ({latest_year})"
+        title=f"{country}: Emissions by Sector ({latest_year})",
+        labels={"share": "Share of national emissions", "sector": "Sector"}
     )
 
     fig1.update_xaxes(tickformat=".0%")
 
     # ------------------------
-    # Chart 2: Cumulative coverage
+    # Top sectors
     # ------------------------
-    sector_sorted = sector_totals.sort_values(
-        "share", ascending=False
-    ).reset_index(drop=True)
+    top_sectors = (
+        sector_latest.sort_values("share", ascending=False)
+                     .head(5)["sector"]
+                     .tolist()
+    )
 
-    sector_sorted["cumulative_share"] = sector_sorted["share"].cumsum()
-    sector_sorted["rank"] = sector_sorted.index + 1
+    df_top = df_country[df_country["sector"].isin(top_sectors)]
 
+    yearly_totals = (
+        df_top.groupby(["year", "sector"], as_index=False)
+              .agg(emissions=("emissions", "sum"))
+    )
+
+    # ------------------------
+    # Chart 2: Absolute trends
+    # ------------------------
     fig2 = px.line(
-        sector_sorted,
-        x="rank",
-        y="cumulative_share",
-        markers=True,
-        labels={
-            "rank": "Number of sectors (ranked)",
-            "cumulative_share": "Cumulative share of emissions"
-        },
-        title=f"{country}: Cumulative Emissions Coverage"
-    )
-
-    fig2.update_yaxes(tickformat=".0%")
-    fig2.update_xaxes(dtick=1)
-
-    # ------------------------
-    # Chart 3: Emissions trends (top 5 sectors)
-    # ------------------------
-    top_sectors = sector_sorted.head(5)["sector"].tolist()
-
-    df_trends = df_country[df_country["sector"].isin(top_sectors)]
-
-    trend_totals = (
-        df_trends.groupby(["year", "sector"], as_index=False)
-                 .agg(emissions=("emissions", "sum"))
-    )
-
-    fig3 = px.line(
-        trend_totals,
+        yearly_totals,
         x="year",
         y="emissions",
         color="sector",
-        labels={
-            "year": "Year",
-            "emissions": "Emissions",
-            "sector": "Sector"
-        },
-        title=f"{country}: Emissions Trends (Top 5 Sectors)"
+        title=f"{country}: Emissions Trends (Top 5 Sectors)",
+        labels={"emissions": "Emissions", "year": "Year", "sector": "Sector"}
     )
+
+    # ------------------------
+    # Chart 3: Structure (ordered)
+    # ------------------------
+    yearly_totals["year_total"] = (
+        yearly_totals.groupby("year")["emissions"].transform("sum")
+    )
+
+    yearly_totals["share"] = (
+        yearly_totals["emissions"] / yearly_totals["year_total"]
+    )
+
+    sector_order = (
+        sector_latest.sort_values("share", ascending=False)["sector"]
+                     .tolist()
+    )
+
+    fig3 = px.area(
+        yearly_totals,
+        x="year",
+        y="share",
+        color="sector",
+        groupnorm="fraction",
+        category_orders={"sector": sector_order},
+        title=f"{country}: Emissions Structure Over Time (Top 5 Sectors)",
+        labels={"share": "Share of emissions", "year": "Year", "sector": "Sector"}
+    )
+
+    fig3.update_yaxes(tickformat=".0%")
 
     return fig1, fig2, fig3
 
@@ -164,5 +177,4 @@ def update_dashboard(country):
 # ------------------------------------------------------------
 
 if __name__ == "__main__":
-
-    app.run(debug=True, jupyter_mode='inline')
+    app.run(debug=True)
