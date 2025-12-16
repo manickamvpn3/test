@@ -25,7 +25,7 @@ latest_year = df["year"].max()
 # ------------------------------------------------------------
 
 app = Dash(__name__)
-serever = app.server
+server = app.server
 app.layout = html.Div(
     style={"maxWidth": "1200px", "margin": "auto"},
     children=[
@@ -178,3 +178,4 @@ def update_dashboard(country):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
